@@ -1,137 +1,204 @@
 import pandas as pd
-import numpy as np
 import streamlit as st
 import requests
 import plotly.express as px
-from io import BytesIO  
+from io import BytesIO
 from babel.numbers import format_currency
 
+# --- Konfigurasi Halaman & Judul Utama ---
+# st.set_page_config untuk menggunakan layout 'wide' agar lebih lega.
+st.set_page_config(layout="wide")
+st.title('E-Commerce Dashboard: Analisis Kinerja Penjualan')
+
+# --- Fungsi untuk Memuat Data ---
+# @st.cache_data digunakan agar Streamlit tidak perlu mengunduh dan memproses ulang data setiap kali pengguna berinteraksi
+# dengan filter. Ini secara drastis meningkatkan kecepatan aplikasi.
+@st.cache_data
+def load_data(url):
+    """Mengunduh, membaca, dan memproses data dari Google Drive."""
+    try:
+        response = requests.get(url)
+        response.raise_for_status()  # Akan error jika status code bukan 2xx
+        data = pd.read_csv(BytesIO(response.content))
+        # Konversi kolom tanggal ke tipe data datetime
+        data['order_purchase_timestamp'] = pd.to_datetime(data['order_purchase_timestamp'])
+        return data
+    except requests.exceptions.RequestException as e:
+        st.error(f"Gagal mengunduh dataset: {e}")
+        return None
+    except Exception as e:
+        st.error(f"Terjadi kesalahan saat memproses data: {e}")
+        return None
+
+# --- Memuat Data ---
 # ID file dari Google Drive
-file_id = "1gFSBGm9U_w6rrHvP3qnTnvnGT2Mwc1LP"  # Ganti dengan ID file-mu
+file_id = "1gFSBGm9U_w6rrHvP3qnTnvnGT2Mwc1LP"
 url = f"https://drive.google.com/uc?id={file_id}"
+all_df = load_data(url)
 
-# Download file
-response = requests.get(url)
-
-if response.status_code == 200:
-    all_df = pd.read_csv(BytesIO(response.content))
-else:
-    st.error("Gagal mengunduh dataset. Periksa ID file atau izin akses.")
+# Jika data gagal dimuat, hentikan eksekusi aplikasi
+if all_df is None:
     st.stop()
 
-# Konversi kolom tanggal ke datetime
-all_df['order_purchase_timestamp'] = pd.to_datetime(all_df['order_purchase_timestamp'])
+# --- Sidebar untuk Filter ---
+with st.sidebar:
+    st.header('Filter Data')
+    # Filter tanggal
+    start_date = st.date_input('Start Date', all_df['order_purchase_timestamp'].min().date())
+    end_date = st.date_input('End Date', all_df['order_purchase_timestamp'].max().date())
 
-# Sidebar untuk filter data
-st.sidebar.header('Filter Data')
-start_date = st.sidebar.date_input('Start Date', all_df['order_purchase_timestamp'].min())
-end_date = st.sidebar.date_input('End Date', all_df['order_purchase_timestamp'].max())
+    # Filter Kategori Produk
+    # Menambahkan opsi 'Semua Kategori' untuk kemudahan
+    all_categories = ['Semua Kategori'] + sorted(all_df['product_category_name'].unique().tolist())
+    selected_category = st.selectbox('Pilih Kategori Produk', all_categories)
 
-# Filter tambahan: Kategori Produk
-product_categories = all_df['product_category_name'].unique()
-selected_categories = st.sidebar.multiselect('Pilih Kategori Produk', product_categories, default=product_categories)
+# --- Proses Filtering Data ---
+# Konversi start_date dan end_date ke datetime untuk perbandingan
+start_datetime = pd.to_datetime(start_date)
+end_datetime = pd.to_datetime(end_date)
 
-# Filter data
+# Terapkan filter ke dataframe
 filtered_df = all_df[
-    (all_df['order_purchase_timestamp'] >= pd.to_datetime(start_date)) & 
-    (all_df['order_purchase_timestamp'] <= pd.to_datetime(end_date)) & 
-    (all_df['product_category_name'].isin(selected_categories))
+    (all_df['order_purchase_timestamp'] >= start_datetime) &
+    (all_df['order_purchase_timestamp'] <= end_datetime + pd.Timedelta(days=1))
 ]
 
-# Header dashboard
-st.title('E-Commerce Dashboard')
+# Terapkan filter kategori jika bukan 'Semua Kategori'
+if selected_category != 'Semua Kategori':
+    filtered_df = filtered_df[filtered_df['product_category_name'] == selected_category]
 
 
-# Metrik utama
-st.header('Metrik Utama')
+# --- Menampilkan Metrik Utama ---
+st.header('Ringkasan Kinerja')
 col1, col2, col3 = st.columns(3)
+
 with col1:
     total_orders = filtered_df['order_id'].nunique()
-    st.metric("Total Orders", value=total_orders)
+    st.metric("Total Pesanan", value=f"{total_orders:,}")
+
 with col2:
     total_revenue = filtered_df['payment_value'].sum()
-    st.metric("Total Revenue", value=format_currency(total_revenue, "R$", locale='id_ID'))
+    st.metric("Total Pendapatan", value=format_currency(total_revenue, "BRL", locale='pt_BR'))
+
 with col3:
-    avg_order_value = filtered_df['payment_value'].mean()
-    st.metric("Average Order Value", value=format_currency(avg_order_value, "R$", locale='id_ID'))
+    # Hindari division by zero jika tidak ada order
+    avg_order_value = total_revenue / total_orders if total_orders > 0 else 0
+    st.metric("Pendapatan Rata-Rata/Pesanan", value=format_currency(avg_order_value, "BRL", locale='pt_BR'))
 
-# Jumlah pelanggan per negara bagian (Plotly)
-st.header('Jumlah Pelanggan per Negara Bagian')
-customer_by_state = filtered_df.groupby('customer_state')['customer_unique_id'].nunique().reset_index(name='total_customers')
-customer_by_state = customer_by_state.sort_values(by='total_customers', ascending=False)
-fig = px.bar(customer_by_state, x='customer_state', y='total_customers', 
-             labels={'customer_state': 'Negara Bagian', 'total_customers': 'Total Pelanggan'})
-st.plotly_chart(fig)
+st.markdown("---") # Garis pemisah
 
-# Jumlah pelanggan per kota (Plotly)
-st.header('Top 10 Kota dengan Jumlah Pelanggan Tertinggi')
-customer_by_city = filtered_df.groupby('customer_city')['customer_unique_id'].nunique().reset_index(name='total_customers')
-customer_by_city = customer_by_city.sort_values(by='total_customers', ascending=False).head(10)
-fig = px.bar(customer_by_city, x='customer_city', y='total_customers', 
-             labels={'customer_city': 'Kota', 'total_customers': 'Total Pelanggan'})
-st.plotly_chart(fig)
+# --- Penggunaan Tabs untuk Organisasi Konten ---
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Tren Penjualan",
+    "📦 Analisis Produk",
+    "👥 Analisis Pelanggan",
+    "🚚 Analisis Pesanan & Pengiriman"
+])
 
-# Revenue per kategori produk (Plotly)
-st.header('Top 10 Kategori Produk Berdasarkan Revenue')
-category_revenue = filtered_df.groupby('product_category_name')['payment_value'].sum().reset_index(name='total_revenue')
-category_revenue = category_revenue.sort_values(by='total_revenue', ascending=False).head(10)
-fig = px.bar(category_revenue, x='product_category_name', y='total_revenue', 
-             labels={'product_category_name': 'Kategori Produk', 'total_revenue': 'Total Revenue'})
-st.plotly_chart(fig)
+# --- Konten TAB 1: Tren Penjualan ---
+with tab1:
+    st.subheader("Tren Pendapatan Bulanan")
+    filtered_df['order_purchase_month'] = filtered_df['order_purchase_timestamp'].dt.to_period('M').astype(str)
+    revenue_by_month = filtered_df.groupby('order_purchase_month')['payment_value'].sum().reset_index()
 
-# Distribusi nilai pengiriman (Plotly)
-st.header('Distribusi Nilai Pengiriman')
-fig = px.histogram(filtered_df, x='freight_value', nbins=50, title="Distribusi Nilai Pengiriman")
-st.plotly_chart(fig)
+    fig = px.line(
+        revenue_by_month,
+        x='order_purchase_month',
+        y='payment_value',
+        title="Total Pendapatan per Bulan",
+        labels={'order_purchase_month': 'Bulan', 'payment_value': 'Total Pendapatan'},
+        markers=True
+    )
+    fig.update_layout(yaxis_tickprefix='R$ ')
+    st.plotly_chart(fig, use_container_width=True)
 
-# Distribusi status pesanan (Plotly)
-st.header('Distribusi Status Pesanan')
-order_status_distribution = filtered_df['order_status'].value_counts().reset_index()
-order_status_distribution.columns = ['order_status', 'count']
-fig = px.bar(order_status_distribution, x='order_status', y='count', 
-             labels={'order_status': 'Status Pesanan', 'count': 'Jumlah Pesanan'})
-st.plotly_chart(fig)
+# --- Konten TAB 2: Analisis Produk ---
+with tab2:
+    col_prod1, col_prod2 = st.columns(2)
+    with col_prod1:
+        st.subheader("Top 10 Kategori (Pendapatan)")
+        category_revenue = filtered_df.groupby('product_category_name')['payment_value'].sum().nlargest(10).reset_index()
+        fig = px.bar(
+            category_revenue,
+            x='payment_value',
+            y='product_category_name',
+            orientation='h',
+            title="Top 10 Kategori Produk berdasarkan Pendapatan",
+            labels={'product_category_name': 'Kategori Produk', 'payment_value': 'Total Pendapatan'}
+        )
+        fig.update_layout(xaxis_tickprefix='R$ ', yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
 
-# Top 10 kategori produk dengan harga tertinggi (Plotly)
-st.header('Top 10 Kategori Produk dengan Harga Tertinggi')
-average_price_by_category = filtered_df.groupby('product_category_name')['price'].mean().reset_index()
-average_price_by_category = average_price_by_category.sort_values(by='price', ascending=False).head(10)
-fig = px.bar(average_price_by_category, x='price', y='product_category_name', orientation='h', 
-              labels={'price': 'Rata-rata Harga', 'product_category_name': 'Kategori Produk'})
-st.plotly_chart(fig)
+    with col_prod2:
+        st.subheader("Top 10 Kategori (Terlaris)")
+        # Menggunakan .size() atau .count() lebih akurat untuk jumlah item terjual daripada .sum('order_item_id')
+        sales_by_category = filtered_df.groupby('product_category_name').size().nlargest(10).reset_index(name='items_sold')
+        fig = px.bar(
+            sales_by_category,
+            x='items_sold',
+            y='product_category_name',
+            orientation='h',
+            title="Top 10 Kategori Produk berdasarkan Jumlah Terjual",
+            labels={'product_category_name': 'Kategori Produk', 'items_sold': 'Jumlah Item Terjual'}
+        )
+        fig.update_layout(yaxis={'categoryorder':'total ascending'})
+        st.plotly_chart(fig, use_container_width=True)
 
-# Top 10 kategori produk dengan penjualan tertinggi (Plotly)
-st.header('Top 10 Kategori Produk dengan Penjualan Tertinggi')
-total_sales_by_category = filtered_df.groupby('product_category_name')['order_item_id'].sum().reset_index()
-total_sales_by_category = total_sales_by_category.sort_values(by='order_item_id', ascending=False).head(10)
-fig = px.bar(total_sales_by_category, x='order_item_id', y='product_category_name', orientation='h', 
-              labels={'order_item_id': 'Total Penjualan', 'product_category_name': 'Kategori Produk'})
-st.plotly_chart(fig)
+# --- Konten TAB 3: Analisis Pelanggan ---
+with tab3:
+    col_cust1, col_cust2 = st.columns(2)
+    with col_cust1:
+        st.subheader("Pelanggan per Negara Bagian")
+        customer_by_state = filtered_df.groupby('customer_state')['customer_unique_id'].nunique().nlargest(10).reset_index()
+        fig = px.bar(
+            customer_by_state,
+            x='customer_state',
+            y='customer_unique_id',
+            title="Top 10 Negara Bagian dengan Pelanggan Terbanyak",
+            labels={'customer_state': 'Negara Bagian', 'customer_unique_id': 'Jumlah Pelanggan Unik'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# Tren revenue bulanan (Plotly)
-st.header('Tren Revenue Bulanan')
-filtered_df['order_purchase_month'] = filtered_df['order_purchase_timestamp'].dt.to_period('M')
-total_revenue_by_month = filtered_df.groupby('order_purchase_month')['payment_value'].sum().reset_index()
-total_revenue_by_month['order_purchase_month'] = total_revenue_by_month['order_purchase_month'].astype(str)
-fig = px.line(total_revenue_by_month, x='order_purchase_month', y='payment_value', 
-              labels={'order_purchase_month': 'Bulan', 'payment_value': 'Total Revenue'})
-st.plotly_chart(fig)
+    with col_cust2:
+        st.subheader("Pelanggan per Kota")
+        customer_by_city = filtered_df.groupby('customer_city')['customer_unique_id'].nunique().nlargest(10).reset_index()
+        fig = px.bar(
+            customer_by_city,
+            x='customer_city',
+            y='customer_unique_id',
+            title="Top 10 Kota dengan Pelanggan Terbanyak",
+            labels={'customer_city': 'Kota', 'customer_unique_id': 'Jumlah Pelanggan Unik'}
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# Pola musiman penjualan (Plotly)
-st.header('Pola Musiman Penjualan')
-filtered_df['order_purchase_month_only'] = filtered_df['order_purchase_timestamp'].dt.month
-seasonal_sales = filtered_df.groupby('order_purchase_month_only').size().reset_index(name='total_orders')
-fig = px.bar(seasonal_sales, x='order_purchase_month_only', y='total_orders', 
-             labels={'order_purchase_month_only': 'Bulan', 'total_orders': 'Jumlah Pesanan'})
-st.plotly_chart(fig)
+# --- Konten TAB 4: Analisis Pesanan & Pengiriman ---
+with tab4:
+    col_order1, col_order2 = st.columns(2)
+    with col_order1:
+        st.subheader("Distribusi Status Pesanan")
+        order_status = filtered_df['order_status'].value_counts().reset_index()
+        fig = px.pie(
+            order_status,
+            names='order_status',
+            values='count',
+            title="Proporsi Status Pesanan",
+            hole=0.4
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# Distribusi metode pembayaran (Plotly)
-st.header('Distribusi Metode Pembayaran')
-payment_frequency = filtered_df['payment_type'].value_counts().reset_index()
-payment_frequency.columns = ['payment_type', 'count']
-fig = px.bar(payment_frequency, x='payment_type', y='count', 
-             labels={'payment_type': 'Metode Pembayaran', 'count': 'Jumlah Transaksi'})
-st.plotly_chart(fig)
+    with col_order2:
+        st.subheader("Distribusi Metode Pembayaran")
+        payment_type = filtered_df['payment_type'].value_counts().reset_index()
+        fig = px.pie(
+            payment_type,
+            names='payment_type',
+            values='count',
+            title="Proporsi Metode Pembayaran",
+            hole=0.4
+        )
+        st.plotly_chart(fig, use_container_width=True)
 
-# Footer
-st.caption('Copyright © 2023 by Dian Pandu Syahfitra')
+
+# --- Footer ---
+st.markdown("---")
+st.caption('Copyright © 2025 (Versi Disederhanakan)')
