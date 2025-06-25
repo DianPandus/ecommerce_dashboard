@@ -14,3 +14,4 @@ folium>=0.15.0
 contextily>=1.4.0
 keplergl>=0.3.0
 pyarrow==16.0.0
+plotly
