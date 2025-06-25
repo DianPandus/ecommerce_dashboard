@@ -11,7 +11,7 @@ Proyek ini menyajikan analisis mendalam terhadap **Olist E-Commerce Dataset**, s
 
 Anda dapat mengakses dan berinteraksi langsung dengan dashboard melalui link berikut:
 
-**[https://dashboard-ecommerce-dianps.streamlit.app/](https://dashboard-ecommerce-dianps.streamlit.app/)**
+**[[https://dashboard-ecommerce-dianps.streamlit.app/](https://ecommerce-dashboards.streamlit.app/)**
 
 ## 🎯 Latar Belakang & Tujuan
 
